@@ -1,0 +1,261 @@
+/*
+ * --------------------
+ * Company							: Tianjin techvan
+ * --------------------
+ * Project Name					: AGV
+ * Description					: C file
+ * --------------------
+ * Tool Versions				: uVision V5.17.0.0
+ * Target Device				: STM32F407IGT6
+ * --------------------
+ * Engineer							: wangyulong
+ * Revision							: 1.0
+ * Created Date					: 2016.01.03
+ * --------------------
+ * Engineer							:
+ * Revision							:
+ * Modified Date				:
+ * --------------------
+ * Additional Comments	:
+ *
+ * --------------------
+ */
+
+#include "led.h"
+#include "delay.h"
+#include "key.h"
+#include "sys.h"
+#include "usart.h"	 
+#include "can.h"
+#include "beep.h"
+#include "exti.h"
+#include "timer.h"
+#include "lock.h"
+#include "commhead.h"
+#include "string.h"
+#include "stdlib.h"
+#include "math.h"
+#include "stdio.h"
+#include "can.h"
+#include "FM1702.h"
+
+#define FLASH_ADR 0x0801FC00
+ #pragma pack(2) 
+
+  u32 data1=87654321;	
+  u32 data=0;
+	u8 res;
+  u16 length;
+	u8 rfid_status1;
+	u8 rfid_status2;
+	u8 report_status1;
+	u8 report_status2;
+	u8 countVal1;
+	u8 countVal2;
+ int main(void)
+ {	 
+
+  u8 i;
+	u8 canbuf[8];
+
+	u8 mode=CAN_Mode_Normal;//CAN工作模式;CAN_Mode_Normal(0)：普通模式，CAN_Mode_LoopBack(1)：环回模式
+	delay_init();	    	 //延时函数初始化	  
+	NVIC_PriorityGroupConfig(NVIC_PriorityGroup_2);//设置中断优先级分组为组2：2位抢占优先级，2位响应优先级
+	uart_init(115200);	 	//串口初始化为115200
+	LED_Init();		  		//初始化与LED连接的硬件接口
+  BEEP_Init();
+	KEY_Init();				//按键初始化
+  LOCK_Init();	 
+  TIM3_Int_Init(99,719);	 
+  Init_FM1702(); 
+	CAN_Mode_Init(CAN_SJW_1tq,CAN_BS2_8tq,CAN_BS1_9tq,4,CAN_Mode_Normal);//CAN初始化环回模式,波特率500Kbps    
+	for (i=0;i<8;i++)
+	canbuf[i]=i*2;
+	timerfun1=pwm1; 
+  timerfun2=pwm2; 
+
+ 	while(1)
+	{
+
+       PCAN_BODY pBODY =NULL;
+			 
+		  if((WRPtr - RDPtr)>0)                //原来写的是大于8,发现有些指令根本不需要8字节
+			{
+				PCAN_ADDR pADDR = (PCAN_ADDR)recvBuffer;
+				if((pADDR->dest)&0x7f)
+				{
+				  pBODY = (PCAN_BODY)(pADDR+1);
+					if((pADDR->dest&0x7f)== chipID)                    //using the two parallel if                            
+					{
+					 choiceFlag1 = 1;
+					}	
+					else if((pADDR->dest&0x7f)== chipID+1)
+					{
+					 choiceFlag2 = 1;
+					}	
+				}
+				else
+				{
+				 	PDEST_EXTEND pEXTEND = (PDEST_EXTEND)(pADDR+1);
+				  pBODY = (PCAN_BODY)(pEXTEND+1);
+					if((pEXTEND->dest_extend)&(1<<chipID) )
+					{
+					 choiceFlag1 = 1;
+					}
+					if((pEXTEND->dest_extend)&(1<<(chipID+1)) )
+					{
+					 choiceFlag2 = 1;
+					}
+				}
+				u8 size;
+				size = pBODY ->size;
+				 length = WRPtr - RDPtr;
+				if( (WRPtr - RDPtr)>= size)
+				{
+				  if((choiceFlag1==1)||(choiceFlag2==1))
+					{
+						switch(pBODY->command)
+						{
+							case CAN_SET_LED:
+							{
+						   PSET_LED pLED = (PSET_LED)(pBODY+1);
+							 if(choiceFlag1)
+							 {
+							   timerfun1=pwm1;
+								 memcpy(PWM_WideCon1,pLED,3);
+							 }
+							 if(choiceFlag2)
+							 {
+							   timerfun2=pwm2;
+								 memcpy(PWM_WideCon2,pLED,3);
+							 }
+							}
+							break;
+							case CAN_SET_LOCK:
+							{
+						   PSET_LOCK pLOCK = (PSET_LOCK)(pBODY+1);
+							 if(choiceFlag1)
+							 {
+								 if(pLOCK->lock)
+                 {
+								  LOCK1P =1;
+									LOCK1N =0; 
+								  delay_ms(30);
+								  LOCK1P =0;
+									LOCK1N =0;
+								 }
+								 else
+								 {
+									LOCK1P =0;
+								  LOCK1N =1;
+								  delay_ms(30);
+									LOCK1P =0;
+								  LOCK1N =0;
+								 }
+							 }
+							 if(choiceFlag2)
+							 {
+								 if(pLOCK->lock)
+                 {
+									LOCK2N =0;
+								  LOCK2P =1;
+								  delay_ms(30);
+									LOCK2N =0;
+								  LOCK2P =0;
+								 }
+								 else
+								 {
+								  LOCK2N =1;
+									LOCK2P =0;
+								  delay_ms(30);
+								  LOCK2N =0;
+									LOCK2P =0;
+								 }
+							 }
+							}
+							break;
+							case CAN_GET_RFID:
+							{
+						   //PRFID pRFID = (PRFID)(pBODY+1);
+							if(choiceFlag1)
+							 {
+								 rfid_status1=Read_tag_1st();
+								 if(rfid_status1)
+								 {
+								  memcpy(relayBuf,buffer,16);
+                  SendPacket(chipID,ACK);									 
+								 }
+								 else
+								 {
+                  memset(relayBuf,0xff,16);
+								  SendPacket(chipID,ACK);	
+								 }
+							 }
+							 if(choiceFlag2)
+							 {
+                  rfid_status2=Read_tag_2nd();
+								 if(rfid_status2)
+								 {
+								 	memcpy(relayBuf,buffer,16);
+                  SendPacket(chipID+1,ACK);	
+								 }
+								 else
+								 {
+                  memset(relayBuf,0xff,16);
+								  SendPacket(chipID+1,ACK);									 
+								 
+								 }
+							 }	
+							}
+							break;
+							case CAN_SET_KEY:
+							{
+						   PKEY pKEY = (PKEY)(pBODY+1);
+							}
+							break;
+							
+						}
+						choiceFlag1=0;
+						choiceFlag2=0;
+					}	
+
+			  RDPtr = RDPtr+size;
+				}
+
+			
+			}
+			
+	    rfid_status1=Read_tag_1st();
+			 if(rfid_status1)
+			 {
+				 countVal1++;				 
+			 }
+			 else
+			 {
+			   countVal1=0;
+			 }
+			rfid_status2=Read_tag_2nd();
+			 if(rfid_status2)
+			 {
+			   countVal2++;	   					 
+			 }
+			 else
+			 {
+			   countVal2=0;
+			 }
+			 if(countVal1==10)
+			 {
+				memcpy(relayBuf,buffer,16);
+				SendPacket(chipID,NOTIFY);									 
+			 }
+			 if(countVal2==10)
+			 {
+				memcpy(relayBuf,buffer,16);
+				SendPacket(chipID+1,NOTIFY);	
+			 }
+			
+  		
+	}
+}
+
+
